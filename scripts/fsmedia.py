@@ -9,7 +9,6 @@ Holds optional pre/post processing functions for convert and extract.
 import logging
 import os
 import sys
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -138,12 +137,12 @@ class Alignments(AlignmentsBase):
             logger.warning("Skip Existing/Skip Faces selected, but no alignments file found!")
             return data
 
-        data = self._serializer.load(self.file)
+        data = super()._load()
 
         if skip_faces:
             # Remove items from alignments that have no faces so they will
             # be re-detected
-            del_keys = [key for key, val in data.items() if not val]
+            del_keys = [key for key, val in data.items() if not val["faces"]]
             logger.debug("Frames with no faces selected for redetection: %s", len(del_keys))
             for key in del_keys:
                 if key in data:
@@ -502,7 +501,7 @@ class DebugLandmarks(PostProcessAction):  # pylint: disable=too-few-public-metho
         for idx, face in enumerate(extract_media.detected_faces):
             logger.trace("Drawing Landmarks. Frame: '%s'. Face: %s", frame, idx)
             # Landmarks
-            for (pos_x, pos_y) in face.aligned.landmarks:
+            for (pos_x, pos_y) in face.aligned.landmarks.astype("int32"):
                 cv2.circle(face.aligned.face, (pos_x, pos_y), 1, (0, 255, 255), -1)
             # Pose
             center = tuple(np.int32((face.aligned.size / 2, face.aligned.size / 2)))
@@ -604,7 +603,7 @@ class FaceFilter(PostProcessAction):
 
         logger.info("%s: %s", f_type.title(), f_args)
         filter_files = f_args if isinstance(f_args, list) else [f_args]
-        filter_files = list(filter(lambda fpath: Path(fpath).exists(), filter_files))
+        filter_files = list(filter(lambda fpath: os.path.exists(fpath), filter_files))
         if not filter_files:
             logger.warning("Face %s files were requested, but no files could be found. This "
                            "filter will not be applied.", f_type)

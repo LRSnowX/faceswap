@@ -24,7 +24,7 @@ from keras.optimizers import Adam, Nadam, RMSprop
 
 from lib.serializer import get_serializer
 from lib.model.backup_restore import Backup
-from lib.model import losses
+from lib.model import losses, optimizers
 from lib.model.nn_blocks import set_config as set_nnblock_config
 from lib.utils import get_backend, FaceswapError
 from plugins.train._config import Config
@@ -64,6 +64,32 @@ def KerasModel(inputs, outputs, name):  # pylint:disable=invalid-name
     return KModel(inputs, outputs, name=name)
 
 
+def _get_all_sub_models(model, models=None):
+    """ For a given model, return all sub-models that occur (recursively) as children.
+
+    Parameters
+    ----------
+    model: :class:`keras.models.Model`
+        A Keras model to scan for sub models
+    models: `None`
+        Do not provide this parameter. It is used for recursion
+
+    Returns
+    -------
+    list
+        A list of all :class:`keras.models.Model`s found within the given model. The provided
+        model will always be returned in the first position
+    """
+    if models is None:
+        models = [model]
+    else:
+        models.append(model)
+    for layer in model.layers:
+        if isinstance(layer, KModel):
+            _get_all_sub_models(layer, models=models)
+    return models
+
+
 class ModelBase():
     """ Base class that all model plugins should inherit from.
 
@@ -98,6 +124,7 @@ class ModelBase():
 
         self.input_shape = None  # Must be set within the plugin after initializing
         self.trainer = "original"  # Override for plugin specific trainer
+        self.color_order = "bgr"  # Override for plugin specific image color channel order
 
         self._args = arguments
         self._is_predict = predict
@@ -170,6 +197,12 @@ class ModelBase():
         """ str: The name of this model based on the plugin name. """
         basename = os.path.basename(sys.modules[self.__module__].__file__)
         return os.path.splitext(basename)[0].lower()
+
+    @property
+    def model_name(self):
+        """ str: The name of the keras model. Generally this will be the same as :attr:`name`
+        but some plugins will override this when they contain multiple architectures """
+        return self.name
 
     @property
     def output_shapes(self):
@@ -253,6 +286,7 @@ class ModelBase():
         Finally, a model summary is outputted to the logger at verbose level.
         """
         self._update_legacy_models()
+        is_summary = hasattr(self._args, "summary") and self._args.summary
         with self._settings.strategy_scope():
             if self._io.model_exists:
                 model = self._io._load()  # pylint:disable=protected-access
@@ -265,7 +299,7 @@ class ModelBase():
                 self._validate_input_shape()
                 inputs = self._get_inputs()
                 self._model = self.build_model(inputs)
-            if not self._is_predict:
+            if not is_summary and not self._is_predict:
                 self._compile_model()
             self._output_summary()
 
@@ -355,10 +389,13 @@ class ModelBase():
 
     def _output_summary(self):
         """ Output the summary of the model and all sub-models to the verbose logger. """
-        self._model.summary(print_fn=lambda x: logger.verbose("%s", x))
-        for layer in self._model.layers:
-            if isinstance(layer, KModel):
-                layer.summary(print_fn=lambda x: logger.verbose("%s", x))
+        if hasattr(self._args, "summary") and self._args.summary:
+            print_fn = None  # Print straight to stdout
+        else:
+            # print to logger
+            print_fn = lambda x: logger.verbose("%s", x)  # noqa
+        for model in _get_all_sub_models(self._model):
+            model.summary(print_fn=print_fn)
 
     def save(self):
         """ Save the model to disk.
@@ -381,15 +418,20 @@ class ModelBase():
         optimizer = _Optimizer(self.config["optimizer"],
                                self.config["learning_rate"],
                                self.config.get("clipnorm", False),
+                               10 ** int(self.config["epsilon_exponent"]),
                                self._args).optimizer
         if self._settings.use_mixed_precision:
             optimizer = self._settings.loss_scale_optimizer(optimizer)
         if get_backend() == "amd":
             self._rewrite_plaid_outputs()
+
+        weights = _Weights(self)
+        weights.load(self._io.model_exists)
+        weights.freeze()
+
         self._loss.configure(self._model)
         self._model.compile(optimizer=optimizer, loss=self._loss.functions)
-        if not self._is_predict:
-            self._state.add_session_loss_names(self._loss.names)
+        self._state.add_session_loss_names(self._loss.names)
         logger.debug("Compiled Model: %s", self._model)
 
     def _rewrite_plaid_outputs(self):
@@ -516,7 +558,27 @@ class _IO():
             logger.error("Model could not be found in folder '%s'. Exiting", self._model_dir)
             sys.exit(1)
 
-        model = load_model(self._filename, compile=False)
+        try:
+            model = load_model(self._filename, compile=False)
+        except RuntimeError as err:
+            if "unable to get link info" in str(err).lower():
+                msg = (f"Unable to load the model from '{self._filename}'. This may be a "
+                       "temporary error but most likely means that your model has corrupted.\n"
+                       "You can try to load the model again but if the problem persists you "
+                       "should use the Restore Tool to restore your model from backup.\n"
+                       f"Original error: {str(err)}")
+                raise FaceswapError(msg)
+            raise err
+        except KeyError as err:
+            if "unable to open object" in str(err).lower():
+                msg = (f"Unable to load the model from '{self._filename}'. This may be a "
+                       "temporary error but most likely means that your model has corrupted.\n"
+                       "You can try to load the model again but if the problem persists you "
+                       "should use the Restore Tool to restore your model from backup.\n"
+                       f"Original error: {str(err)}")
+                raise FaceswapError(msg)
+            raise err
+
         logger.info("Loaded model from disk: '%s'", self._filename)
         return model
 
@@ -641,7 +703,7 @@ class _Settings():
         self._set_tf_settings(allow_growth, arguments.exclude_gpus)
 
         use_mixed_precision = not is_predict and mixed_precision and get_backend() == "nvidia"
-        # Mixed precision moved out of experimental in tf 2.4
+        # Mixed precision moved out of experimental in tensorflow 2.4
         if use_mixed_precision and self._tf_version[0] == 2 and self._tf_version[1] < 4:
             self._mixed_precision = tf.keras.mixed_precision.experimental
         elif use_mixed_precision:
@@ -679,7 +741,8 @@ class _Settings():
         :class:`tf.keras.mixed_precision.loss_scale_optimizer.LossScaleOptimizer`
             The original optimizer with loss scaling applied
         """
-        # tf versions < 2.4 had different kwargs where scaling needs to be explicitly defined
+        # tensorflow versions < 2.4 had different kwargs where scaling needs to be explicitly
+        # defined
         vers = self._tf_version
         kwargs = dict(loss_scale="dynamic") if vers[0] == 2 and vers[1] < 4 else dict()
         logger.debug("tf version: %s, kwargs: %s", vers, kwargs)
@@ -760,7 +823,7 @@ class _Settings():
 
         if exclude_gpus and self._tf_version[0] == 2 and self._tf_version[1] == 2:
             # TODO remove this hacky fix to disable mixed precision compatibility testing when
-            # tf 2.2 support dropped
+            # tensorflow 2.2 support dropped
             # pylint:disable=import-outside-toplevel,protected-access,import-error
             from tensorflow.python.keras.mixed_precision.experimental import \
                 device_compatibility_check
@@ -830,6 +893,192 @@ class _Settings():
         return retval
 
 
+class _Weights():
+    """ Handling of freezing and loading model weights
+
+    Parameters
+    ----------
+    plugin: :class:`Model`
+        The parent plugin class that owns the IO functions.
+    """
+    def __init__(self, plugin):
+        logger.debug("Initializing %s: (plugin: %s)", self.__class__.__name__, plugin)
+        self._model = plugin.model
+        self._name = plugin.model_name
+        self._do_freeze = plugin._args.freeze_weights
+        self._weights_file = self._check_weights_file(plugin._args.load_weights)
+
+        freeze_layers = plugin.config.get("freeze_layers")  # Standardized config for freezing
+        load_layers = plugin.config.get("load_layers")  # Standardized config for loading
+        self._freeze_layers = freeze_layers if freeze_layers else ["encoder"]  # No plugin config
+        self._load_layers = load_layers if load_layers else ["encoder"]  # No plugin config
+        logger.debug("Initialized %s", self.__class__.__name__)
+
+    @classmethod
+    def _check_weights_file(cls, weights_file):
+        """ Validate that we have a valid path to a .h5 file.
+
+        Parameters
+        ----------
+        weights_file: str
+            The full path to a weights file
+
+        Returns
+        -------
+        str
+            The full path to a weights file
+        """
+        if not weights_file:
+            logger.debug("No weights file selected.")
+            return None
+
+        msg = ""
+        if not os.path.exists(weights_file):
+            msg = f"Load weights selected, but the path '{weights_file}' does not exist."
+        elif not os.path.splitext(weights_file)[-1].lower() == ".h5":
+            msg = (f"Load weights selected, but the path '{weights_file}' is not a valid Keras "
+                   f"model (.h5) file.")
+
+        if msg:
+            msg += " Please check and try again."
+            raise FaceswapError(msg)
+
+        logger.verbose("Using weights file: %s", weights_file)
+        return weights_file
+
+    def freeze(self):
+        """ If freeze has been selected in the cli arguments, then freeze those models indicated
+        in the plugin's configuration. """
+        # Blanket unfreeze layers, as checking the value of :attr:`layer.trainable` appears to
+        # return ``True`` even when the weights have been frozen
+        for layer in _get_all_sub_models(self._model):
+            layer.trainable = True
+
+        if not self._do_freeze:
+            logger.debug("Freeze weights deselected. Not freezing")
+            return
+
+        for layer in _get_all_sub_models(self._model):
+            if layer.name in self._freeze_layers:
+                logger.info("Freezing weights for '%s' in model '%s'", layer.name, self._name)
+                layer.trainable = False
+                self._freeze_layers.remove(layer.name)
+        if self._freeze_layers:
+            logger.warning("The following layers were set to be frozen but do not exist in the "
+                           "model: %s", self._freeze_layers)
+
+    def load(self, model_exists):
+        """ Load weights for newly created models, or output warning for pre-existing models.
+
+        Parameters
+        ----------
+        model_exists: bool
+            ``True`` if a model pre-exists and is being resumed, ``False`` if this is a new model
+        """
+        if not self._weights_file:
+            logger.debug("No weights file provided. Not loading weights.")
+            return
+        if model_exists and self._weights_file:
+            logger.warning("Ignoring weights file '%s' as this model is resuming.",
+                           self._weights_file)
+            return
+
+        weights_models = self._get_weights_model()
+        all_models = _get_all_sub_models(self._model)
+
+        for model_name in self._load_layers:
+            sub_model = next((lyr for lyr in all_models if lyr.name == model_name), None)
+            sub_weights = next((lyr for lyr in weights_models if lyr.name == model_name), None)
+
+            if not sub_model or not sub_weights:
+                msg = f"Skipping layer {model_name} as not in "
+                msg += "current_model." if not sub_model else f"weights '{self._weights_file}.'"
+                logger.warning(msg)
+                continue
+
+            logger.info("Loading weights for layer '%s'", model_name)
+            skipped_ops = 0
+            loaded_ops = 0
+            for layer in sub_model.layers:
+                success = self._load_layer_weights(layer, sub_weights, model_name)
+                if success == 0:
+                    skipped_ops += 1
+                elif success == 1:
+                    loaded_ops += 1
+
+        del weights_models
+
+        if loaded_ops == 0:
+            raise FaceswapError(f"No weights were succesfully loaded from your weights file: "
+                                f"'{self._weights_file}'. Please check and try again.")
+        if skipped_ops > 0:
+            logger.warning("%s weight(s) were unable to be loaded for your model. This is most "
+                           "likely because the weights you are trying to load were trained with "
+                           "different settings than you have set for your current model.",
+                           skipped_ops)
+
+    def _get_weights_model(self):
+        """ Obtain a list of all sub-models contained within the weights model.
+
+        Returns
+        -------
+        list
+            List of all models contained within the .h5 file
+
+        Raises
+        ------
+        FaceswapError
+            In the event of a failure to load the weights, or the weights belonging to a different
+            model
+        """
+        retval = _get_all_sub_models(load_model(self._weights_file, compile=False))
+        if not retval:
+            raise FaceswapError(f"Error loading weights file {self._weights_file}.")
+
+        if retval[0].name != self._name:
+            raise FaceswapError(f"You are attempting to load weights from a '{retval[0].name}' "
+                                f"model into a '{self._name}' model. This is not supported.")
+        return retval
+
+    def _load_layer_weights(self, layer, sub_weights, model_name):
+        """ Load the weights for a single layer.
+
+        Parameters
+        ----------
+        layer: :class:`keras.layers.Layer`
+            The layer to set the weights for
+        sub_weights: list
+            The list of layers in the weights model to load weights from
+        model_name: str
+            The name of the current sub-model that is having it's weights loaded
+
+        Returns
+        -------
+        int
+            `-1` if the layer has no weights to load. `0` if weights loading was unsuccessful. `1`
+            if weights loading was successful
+        """
+        old_weights = layer.get_weights()
+        if not old_weights:
+            logger.debug("Skipping layer without weights: %s", layer.name)
+            return -1
+
+        layer_weights = next((lyr for lyr in sub_weights.layers if lyr.name == layer.name), None)
+        if not layer_weights:
+            logger.warning("The weights file '%s' for layer '%s' does not contain weights for "
+                           "'%s'. Skipping", self._weights_file, model_name, layer.name)
+            return 0
+
+        new_weights = layer_weights.get_weights()
+        if old_weights[0].shape != new_weights[0].shape:
+            logger.warning("The weights for layer '%s' are of incompatible shapes. Skipping.",
+                           layer.name)
+            return 0
+        logger.verbose("Setting weights for '%s'", layer.name)
+        layer.set_weights(layer_weights.get_weights())
+        return 1
+
+
 class _Optimizer():  # pylint:disable=too-few-public-methods
     """ Obtain the selected optimizer with the appropriate keyword arguments.
 
@@ -841,21 +1090,22 @@ class _Optimizer():  # pylint:disable=too-few-public-methods
         The selected learning rate to use
     clipnorm: bool
         Whether to clip gradients to avoid exploding/vanishing gradients
+    epsilon: float
+        The value to use for the epsilon of the optimizer
     arguments: :class:`argparse.Namespace`
         The arguments that were passed to the train or convert process as generated from
         Faceswap's command line arguments
     """
-    def __init__(self, optimizer, learning_rate, clipnorm, arguments):
+    def __init__(self, optimizer, learning_rate, clipnorm, epsilon, arguments):
         logger.debug("Initializing %s: (optimizer: %s, learning_rate: %s, clipnorm: %s, "
-                     "arguments: %s", self.__class__.__name__, optimizer, learning_rate, clipnorm,
-                     arguments)
-        optimizers = {"adam": Adam, "nadam": Nadam, "rms-prop": RMSprop}
-        self._optimizer = optimizers[optimizer]
-
-        base_kwargs = {"adam": dict(beta_1=0.5, beta_2=0.99),
-                       "nadam": dict(beta_1=0.5, beta_2=0.99),
-                       "rms-prop": dict()}
-        self._kwargs = base_kwargs[optimizer]
+                     "epsilon: %s, arguments: %s)", self.__class__.__name__,
+                     optimizer, learning_rate, clipnorm, epsilon, arguments)
+        valid_optimizers = {"adabelief": (optimizers.AdaBelief,
+                                          dict(beta_1=0.5, beta_2=0.99, epsilon=epsilon)),
+                            "adam": (Adam, dict(beta_1=0.5, beta_2=0.99, epsilon=epsilon)),
+                            "nadam": (Nadam, dict(beta_1=0.5, beta_2=0.99, epsilon=epsilon)),
+                            "rms-prop": (RMSprop, dict(epsilon=epsilon))}
+        self._optimizer, self._kwargs = valid_optimizers[optimizer]
 
         self._configure(learning_rate, clipnorm, arguments)
         logger.verbose("Using %s optimizer", optimizer.title())
@@ -1023,14 +1273,15 @@ class _Loss():
                 loss_func.add_loss(face_loss, mask_channel=mask_channels[0])
                 self._add_l2_regularization_term(loss_func, mask_channels[0])
 
-                mask_channel = 1
+                channel_idx = 1
                 for multiplier in ("eye_multiplier", "mouth_multiplier"):
+                    mask_channel = mask_channels[channel_idx]
                     if self._config[multiplier] > 1:
                         loss_func.add_loss(face_loss,
                                            weight=self._config[multiplier] * 1.0,
-                                           mask_channel=mask_channels[mask_channel])
+                                           mask_channel=mask_channel)
                         self._add_l2_regularization_term(loss_func, mask_channel)
-                    mask_channel += 1
+                    channel_idx += 1
 
             logger.debug("%s: (output_name: '%s', function: %s)", name, output_name, loss_func)
             self._funcs[output_name] = loss_func
@@ -1445,7 +1696,7 @@ class _Inference():  # pylint:disable=too-few-public-methods
                         next_input = inbound_layer
 
                     if get_backend() == "amd" and isinstance(next_input, list):
-                        # tf.keras and keras 2.2 behave differently for layer inputs
+                        # tensorflow.keras and keras 2.2 behave differently for layer inputs
                         layer_inputs.extend(next_input)
                     else:
                         layer_inputs.append(next_input)

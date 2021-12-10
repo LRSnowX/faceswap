@@ -7,7 +7,7 @@ import sys
 
 from tqdm import tqdm
 
-from lib.image import encode_image_with_hash, generate_thumbnail, ImagesLoader, ImagesSaver
+from lib.image import encode_image, generate_thumbnail, ImagesLoader, ImagesSaver
 from lib.multithreading import MultiThread
 from lib.utils import get_folder
 from plugins.extract.pipeline import Extractor, ExtractMedia
@@ -38,8 +38,8 @@ class Extract():  # pylint:disable=too-few-public-methods
     def __init__(self, arguments):
         logger.debug("Initializing %s: (args: %s", self.__class__.__name__, arguments)
         self._args = arguments
-        self._output_dir = None if self._args.skip_saving_faces else str(get_folder(
-            self._args.output_dir))
+        self._output_dir = None if self._args.skip_saving_faces else get_folder(
+            self._args.output_dir)
 
         logger.info("Output Directory: %s", self._args.output_dir)
         self._images = ImagesLoader(self._args.input_dir, fast_count=True)
@@ -284,9 +284,17 @@ class Extract():  # pylint:disable=too-few-public-methods
         final_faces = list()
         filename = os.path.splitext(os.path.basename(extract_media.filename))[0]
         extension = ".png"
+
         for idx, face in enumerate(extract_media.detected_faces):
             output_filename = "{}_{}{}".format(filename, str(idx), extension)
-            face.hash, image = encode_image_with_hash(face.aligned.face, extension)
+            meta = dict(alignments=face.to_png_meta(),
+                        source=dict(alignments_version=self._alignments.version,
+                                    original_filename=output_filename,
+                                    face_index=idx,
+                                    source_filename=os.path.basename(extract_media.filename),
+                                    source_is_video=self._images.is_video,
+                                    source_frame_dims=extract_media.image_size))
+            image = encode_image(face.aligned.face, extension, metadata=meta)
 
             if not self._args.skip_saving_faces:
                 saver.save(output_filename, image)

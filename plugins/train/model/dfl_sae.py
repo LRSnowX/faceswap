@@ -5,11 +5,11 @@
 
 import numpy as np
 
-from keras.layers import Concatenate, Dense, Flatten, Input, Reshape
+from keras.layers import Concatenate, Dense, Flatten, Input, LeakyReLU, Reshape
 
 from lib.model.nn_blocks import Conv2DOutput, Conv2DBlock, ResidualBlock, UpscaleBlock
 
-from ._base import ModelBase, KerasModel
+from ._base import ModelBase, KerasModel, logger
 
 
 class Model(ModelBase):
@@ -23,6 +23,13 @@ class Model(ModelBase):
         self.encoder_dim = self.config["encoder_dims"]
         self.decoder_dim = self.config["decoder_dims"]
 
+        self._patch_weights_management()
+
+    @property
+    def model_name(self):
+        """ str: The name of the keras model. Varies depending on selected architecture. """
+        return f"{self.name}_{self.architecture}"
+
     @property
     def ae_dims(self):
         """ Set the Autoencoder Dimensions or set to default """
@@ -30,6 +37,16 @@ class Model(ModelBase):
         if retval == 0:
             retval = 256 if self.architecture == "liae" else 512
         return retval
+
+    def _patch_weights_management(self):
+        """ Patch in the correct encoder name into the config dictionary for freezing and loading
+        weights based on architecture.
+        """
+        self.config["freeze_layers"] = [f"encoder_{self.architecture}"]
+        self.config["load_layers"] = [f"encoder_{self.architecture}"]
+        logger.debug("Patched encoder layers to config: %s",
+                     {k: v for k, v in self.config.items()
+                      if k in ("freeze_layers", "load_layers")})
 
     def build_model(self, inputs):
         """ Build the DFL-SAE Model """
@@ -53,7 +70,7 @@ class Model(ModelBase):
                        self.decoder("b", enc_output_shape)(encoder_b)]
         autoencoder = KerasModel(inputs,
                                  outputs,
-                                 name="{}_{}".format(self.name, self.architecture))
+                                 name=self.model_name)
         return autoencoder
 
     def encoder_df(self):
@@ -102,18 +119,21 @@ class Model(ModelBase):
         var_x = input_
 
         var_x1 = UpscaleBlock(dims * 8, activation=None)(var_x)
+        var_x1 = LeakyReLU(alpha=0.2)(var_x1)
         var_x1 = ResidualBlock(dims * 8)(var_x1)
         var_x1 = ResidualBlock(dims * 8)(var_x1)
         if self.multiscale_count >= 3:
             outputs.append(Conv2DOutput(3, 5, name="face_out_32_{}".format(side))(var_x1))
 
         var_x2 = UpscaleBlock(dims * 4, activation=None)(var_x1)
+        var_x2 = LeakyReLU(alpha=0.2)(var_x2)
         var_x2 = ResidualBlock(dims * 4)(var_x2)
         var_x2 = ResidualBlock(dims * 4)(var_x2)
         if self.multiscale_count >= 2:
             outputs.append(Conv2DOutput(3, 5, name="face_out_64_{}".format(side))(var_x2))
 
         var_x3 = UpscaleBlock(dims * 2, activation=None)(var_x2)
+        var_x3 = LeakyReLU(alpha=0.2)(var_x3)
         var_x3 = ResidualBlock(dims * 2)(var_x3)
         var_x3 = ResidualBlock(dims * 2)(var_x3)
 

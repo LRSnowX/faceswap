@@ -23,14 +23,13 @@ class FaceswapGui(tk.Tk):
         self._init_args = dict(debug=debug)
         self._config = self.initialize_globals()
         self.set_fonts()
-        self.set_styles()
         self._config.set_geometry(1200, 640, self._config.user_config_dict["fullscreen"])
 
         self.wrapper = ProcessWrapper()
         self.objects = dict()
 
         get_images().delete_preview()
-        preview_trigger().clear()
+        preview_trigger().clear(trigger_type=None)
         self.protocol("WM_DELETE_WINDOW", self.close_app)
         self.build_gui()
         self._last_session = LastSession(self._config)
@@ -50,19 +49,6 @@ class FaceswapGui(tk.Tk):
         for font in ("TkDefaultFont", "TkHeadingFont", "TkMenuFont"):
             tk.font.nametofont(font).configure(family=self._config.default_font[0],
                                                size=self._config.default_font[1])
-
-    def set_styles(self):
-        """ Set global custom styles """
-        gui_style = ttk.Style()
-        gui_style.configure('TLabelframe.Label', foreground="#0046D5", relief=tk.SOLID)
-        gui_style.configure('H1.TLabel',
-                            font=(self._config.default_font[0],
-                                  self._config.default_font[1] + 4,
-                                  "bold"))
-        gui_style.configure('H2.TLabel',
-                            font=(self._config.default_font[0],
-                                  self._config.default_font[1] + 2,
-                                  "bold"))
 
     def build_gui(self, rebuild=False):
         """ Build the GUI """
@@ -163,7 +149,7 @@ class FaceswapGui(tk.Tk):
 
         self._last_session.save()
         get_images().delete_preview()
-        preview_trigger().clear()
+        preview_trigger().clear(trigger_type=None)
         self.quit()
         logger.debug("Closed GUI")
         sys.exit(0)
@@ -182,9 +168,9 @@ class FaceswapGui(tk.Tk):
         confirmtxt = "Processes are still running.\n\nAre you sure you want to exit?"
         if not messagebox.askokcancel("Close", confirmtxt, default="cancel", icon="warning"):
             logger.debug("Close Cancelled")
-            return True
+            return False
         logger.debug("Close confirmed")
-        return False
+        return True
 
 
 class Gui():  # pylint: disable=too-few-public-methods
