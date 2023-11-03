@@ -22,7 +22,7 @@ InstallDir $PROFILE\faceswap
 # Install cli flags
 !define flagsConda "/S /RegisterPython=0 /AddToPath=0 /D=$PROFILE\MiniConda3"
 !define flagsRepo "--depth 1 --no-single-branch ${wwwRepo}"
-!define flagsEnv "-y python=3.8"
+!define flagsEnv "-y python=3.10"
 
 # Folders
 Var ProgramData
@@ -138,9 +138,9 @@ Function pgPrereqCreate
 		    ${NSD_AddStyle} $ctlRadio ${WS_GROUP}
             nsDialogs::SetUserData $ctlRadio "nvidia"
             ${NSD_OnClick} $ctlRadio RadioClick
-        ${NSD_CreateRadioButton} 40% $lblPos% 25% 11u "Setup for AMD GPU"
+        ${NSD_CreateRadioButton} 40% $lblPos% 25% 11u "Setup for DirectML"
             Pop $ctlRadio
-            nsDialogs::SetUserData $ctlRadio "amd"
+            nsDialogs::SetUserData $ctlRadio "directml"
             ${NSD_OnClick} $ctlRadio RadioClick
         ${NSD_CreateRadioButton} 70% $lblPos% 20% 11u "Setup for CPU"
             Pop $ctlRadio
@@ -200,7 +200,7 @@ FunctionEnd
 
 Function CheckSetupType
     ${If} $setupType == ""
-	    MessageBox MB_OK "Please specify whether to setup for Nvidia, AMD or CPU."
+	    MessageBox MB_OK "Please specify whether to setup for Nvidia, DirectML or CPU."
 	    Abort
 	${EndIf}
     StrCpy $Log "$log(check) Setting up for: $setupType$\n"
@@ -370,6 +370,7 @@ Function SetEnvironment
 
     IfFileExists  "$dirConda\envs\$envName" DeleteEnv CreateEnv
         DeleteEnv:
+            DetailPrint "Removing existing Conda Virtual Environment..."
             SetDetailsPrint listonly
             ExecDos::exec /NOUNLOAD /ASYNC /DETAILED "$\"$dirConda\scripts\activate.bat$\" && conda env remove -y -n $\"$envName$\" && conda deactivate"
             pop $0
@@ -381,9 +382,23 @@ Function SetEnvironment
                 Call Abort
             ${EndIf}
 
+        # Often Conda won't actually remove the folder and some of it's contents which leads to permission problems later
+        IfFileExists  "$dirConda\envs\$envName" DeleteFolder CreateEnv
+            DeleteFolder:
+                DetailPrint "Deleting stale Conda Virtual Environment files..."
+                SetDetailsPrint listonly
+                RMDir /r "$dirConda\envs\$envName"
+                pop $0
+                SetDetailsPrint both
+                ${If} $0 != 0
+                    DetailPrint "Error deleting Conda Virtual Environment Folder"
+                    Call Abort
+                ${EndIf}
+
     CreateEnv:
         SetDetailsPrint listonly
-        ExecDos::exec /NOUNLOAD /ASYNC /DETAILED "$\"$dirConda\scripts\activate.bat$\" && conda create ${flagsEnv} -n  $\"$envName$\" && conda deactivate"
+        StrCpy $0 "${flagsEnv}"
+        ExecDos::exec /NOUNLOAD /ASYNC /DETAILED "$\"$dirConda\scripts\activate.bat$\" && conda create $0 -n  $\"$envName$\" && conda deactivate"
         pop $0
         ExecDos::wait $0
         pop $0
@@ -425,11 +440,9 @@ FunctionEnd
 Function SetupFaceSwap
     DetailPrint "Setting up FaceSwap Environment... This may take a while"
     StrCpy $0 "${flagsSetup}"
-    ${If} $setupType != "cpu"
-        StrCpy $0 "$0 --$setupType"
-    ${EndIf}
+    StrCpy $0 "$0 --$setupType"
     SetDetailsPrint listonly
-    ExecDos::exec /NOUNLOAD /ASYNC /DETAILED "$\"$dirConda\scripts\activate.bat$\" && conda activate $\"$envName$\" && python $\"$INSTDIR\setup.py$\" $0 && conda deactivate"
+    ExecDos::exec /NOUNLOAD /ASYNC /DETAILED "$\"$dirConda\scripts\activate.bat$\" && conda activate $\"$envName$\" && python -u $\"$INSTDIR\setup.py$\" $0 && conda deactivate"
     pop $0
     ExecDos::wait $0
     pop $0

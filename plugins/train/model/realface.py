@@ -7,14 +7,18 @@
     Additional thanks: Birb - source of inspiration, great Encoder ideas
                        Kvrooman - additional counseling on auto-encoders and practical advice
     """
+import logging
 import sys
 
-from keras.initializers import RandomNormal
-from keras.layers import Dense, Flatten, Input, LeakyReLU, Reshape
-
+# Ignore linting errors from Tensorflow's thoroughly broken import system
+from tensorflow.keras.initializers import RandomNormal  # pylint:disable=import-error
+from tensorflow.keras.layers import Dense, Flatten, Input, LeakyReLU, Reshape  # noqa:E501  # pylint:disable=import-error
+from tensorflow.keras.models import Model as KModel  # pylint:disable=import-error
 
 from lib.model.nn_blocks import Conv2DOutput, Conv2DBlock, ResidualBlock, UpscaleBlock
-from ._base import ModelBase, KerasModel, logger
+from ._base import ModelBase
+
+logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
 class Model(ModelBase):
@@ -72,7 +76,7 @@ class Model(ModelBase):
 
         outputs = [self.decoder_a()(encoder_a), self.decoder_b()(encoder_b)]
 
-        autoencoder = KerasModel(inputs, outputs, name=self.model_name)
+        autoencoder = KModel(inputs, outputs, name=self.model_name)
         return autoencoder
 
     def encoder(self):
@@ -90,7 +94,7 @@ class Model(ModelBase):
 
         var_x = Conv2DBlock(encoder_complexity * 2**(idx + 1), activation="leakyrelu")(var_x)
 
-        return KerasModel(input_, var_x, name="encoder")
+        return KModel(input_, var_x, name="encoder")
 
     def decoder_b(self):
         """ RealFace Decoder Network """
@@ -134,7 +138,7 @@ class Model(ModelBase):
 
             outputs += [var_y]
 
-        return KerasModel(input_, outputs=outputs, name="decoder_b")
+        return KModel(input_, outputs=outputs, name="decoder_b")
 
     def decoder_a(self):
         """ RealFace Decoder (A) Network """
@@ -179,10 +183,10 @@ class Model(ModelBase):
 
             outputs += [var_y]
 
-        return KerasModel(input_, outputs=outputs, name="decoder_a")
+        return KModel(input_, outputs=outputs, name="decoder_a")
 
     def _legacy_mapping(self):
         """ The mapping of legacy separate model names to single model names """
-        return {"{}_encoder.h5".format(self.name): "encoder",
-                "{}_decoder_A.h5".format(self.name): "decoder_a",
-                "{}_decoder_B.h5".format(self.name): "decoder_b"}
+        return {f"{self.name}_encoder.h5": "encoder",
+                f"{self.name}_decoder_A.h5": "decoder_a",
+                f"{self.name}_decoder_B.h5": "decoder_b"}

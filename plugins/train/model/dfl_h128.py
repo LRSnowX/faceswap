@@ -3,10 +3,12 @@
     Based on https://github.com/iperov/DeepFaceLab
 """
 
-from keras.layers import Dense, Flatten, Input, Reshape
+# Ignore linting errors from Tensorflow's thoroughly broken import system
+from tensorflow.keras.layers import Dense, Flatten, Input, Reshape  # noqa:E501  # pylint:disable=import-error
+from tensorflow.keras.models import Model as KModel  # pylint:disable=import-error
 
 from lib.model.nn_blocks import Conv2DOutput, Conv2DBlock, UpscaleBlock
-from .original import Model as OriginalModel, KerasModel
+from .original import Model as OriginalModel
 
 
 class Model(OriginalModel):
@@ -27,7 +29,7 @@ class Model(OriginalModel):
         var_x = Dense(8 * 8 * self.encoder_dim)(var_x)
         var_x = Reshape((8, 8, self.encoder_dim))(var_x)
         var_x = UpscaleBlock(self.encoder_dim, activation="leakyrelu")(var_x)
-        return KerasModel(input_, var_x, name="encoder")
+        return KModel(input_, var_x, name="encoder")
 
     def decoder(self, side):
         """ DFL H128 Decoder """
@@ -36,7 +38,7 @@ class Model(OriginalModel):
         var_x = UpscaleBlock(self.encoder_dim, activation="leakyrelu")(var_x)
         var_x = UpscaleBlock(self.encoder_dim // 2, activation="leakyrelu")(var_x)
         var_x = UpscaleBlock(self.encoder_dim // 4, activation="leakyrelu")(var_x)
-        var_x = Conv2DOutput(3, 5, name="face_out_{}".format(side))(var_x)
+        var_x = Conv2DOutput(3, 5, name=f"face_out_{side}")(var_x)
         outputs = [var_x]
 
         if self.config.get("learn_mask", False):
@@ -44,6 +46,6 @@ class Model(OriginalModel):
             var_y = UpscaleBlock(self.encoder_dim, activation="leakyrelu")(var_y)
             var_y = UpscaleBlock(self.encoder_dim // 2, activation="leakyrelu")(var_y)
             var_y = UpscaleBlock(self.encoder_dim // 4, activation="leakyrelu")(var_y)
-            var_y = Conv2DOutput(1, 5, name="mask_out_{}".format(side))(var_y)
+            var_y = Conv2DOutput(1, 5, name=f"mask_out_{side}")(var_y)
             outputs.append(var_y)
-        return KerasModel(input_, outputs=outputs, name="decoder_{}".format(side))
+        return KModel(input_, outputs=outputs, name=f"decoder_{side}")

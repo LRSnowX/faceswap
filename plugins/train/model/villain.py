@@ -3,13 +3,16 @@
     Based on the original https://www.reddit.com/r/deepfakes/ code sample + contributions
     Adapted from a model by VillainGuy (https://github.com/VillainGuy) """
 
-from keras.initializers import RandomNormal
-from keras.layers import add, Dense, Flatten, Input, LeakyReLU, Reshape
+# Ignore linting errors from Tensorflow's thoroughly broken import system
+from tensorflow.keras.initializers import RandomNormal  # pylint:disable=import-error
+from tensorflow.keras.layers import add, Dense, Flatten, Input, LeakyReLU, Reshape  # noqa:E501  # pylint:disable=import-error
+from tensorflow.keras.models import Model as KModel  # pylint:disable=import-error
 
 from lib.model.layers import PixelShuffler
 from lib.model.nn_blocks import (Conv2DOutput, Conv2DBlock, ResidualBlock, SeparableConv2DBlock,
                                  UpscaleBlock)
-from .original import Model as OriginalModel, KerasModel
+
+from .original import Model as OriginalModel
 
 
 class Model(OriginalModel):
@@ -22,7 +25,7 @@ class Model(OriginalModel):
 
     def encoder(self):
         """ Encoder Network """
-        kwargs = dict(kernel_initializer=self.kernel_initializer)
+        kwargs = {"kernel_initializer": self.kernel_initializer}
         input_ = Input(shape=self.input_shape)
         in_conv_filters = self.input_shape[0]
         if self.input_shape[0] > 128:
@@ -54,11 +57,11 @@ class Model(OriginalModel):
         var_x = Dense(dense_shape * dense_shape * 1024, **kwargs)(var_x)
         var_x = Reshape((dense_shape, dense_shape, 1024))(var_x)
         var_x = UpscaleBlock(512, activation="leakyrelu", **kwargs)(var_x)
-        return KerasModel(input_, var_x, name="encoder")
+        return KModel(input_, var_x, name="encoder")
 
     def decoder(self, side):
         """ Decoder Network """
-        kwargs = dict(kernel_initializer=self.kernel_initializer)
+        kwargs = {"kernel_initializer": self.kernel_initializer}
         decoder_shape = self.input_shape[0] // 8
         input_ = Input(shape=(decoder_shape, decoder_shape, 512))
 
@@ -72,7 +75,7 @@ class Model(OriginalModel):
         var_x = UpscaleBlock(self.input_shape[0], activation=None, **kwargs)(var_x)
         var_x = LeakyReLU(alpha=0.2)(var_x)
         var_x = ResidualBlock(self.input_shape[0], **kwargs)(var_x)
-        var_x = Conv2DOutput(3, 5, name="face_out_{}".format(side))(var_x)
+        var_x = Conv2DOutput(3, 5, name=f"face_out_{side}")(var_x)
         outputs = [var_x]
 
         if self.config.get("learn_mask", False):
@@ -80,6 +83,6 @@ class Model(OriginalModel):
             var_y = UpscaleBlock(512, activation="leakyrelu")(var_y)
             var_y = UpscaleBlock(256, activation="leakyrelu")(var_y)
             var_y = UpscaleBlock(self.input_shape[0], activation="leakyrelu")(var_y)
-            var_y = Conv2DOutput(1, 5, name="mask_out_{}".format(side))(var_y)
+            var_y = Conv2DOutput(1, 5, name=f"mask_out_{side}")(var_y)
             outputs.append(var_y)
-        return KerasModel(input_, outputs=outputs, name="decoder_{}".format(side))
+        return KModel(input_, outputs=outputs, name=f"decoder_{side}")

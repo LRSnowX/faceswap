@@ -4,11 +4,13 @@
 import logging
 import sys
 
-from keras.initializers import RandomNormal
-from keras.layers import Input, LeakyReLU
+# Ignore linting errors from Tensorflow's thoroughly broken import system
+from tensorflow.keras.initializers import RandomNormal  # pylint:disable=import-error
+from tensorflow.keras.layers import Input, LeakyReLU  # pylint:disable=import-error
+from tensorflow.keras.models import Model as KModel  # pylint:disable=import-error
 
 from lib.model.nn_blocks import Conv2DOutput, UpscaleBlock, ResidualBlock
-from .original import Model as OriginalModel, KerasModel
+from .original import Model as OriginalModel
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -44,7 +46,7 @@ class Model(OriginalModel):
         var_x = LeakyReLU(alpha=0.2)(var_x)
         var_x = ResidualBlock(128, kernel_initializer=self.kernel_initializer)(var_x)
         var_x = UpscaleBlock(64, activation="leakyrelu")(var_x)
-        var_x = Conv2DOutput(3, 5, name="face_out_{}".format(side))(var_x)
+        var_x = Conv2DOutput(3, 5, name=f"face_out_{side}")(var_x)
         outputs = [var_x]
 
         if self.config.get("learn_mask", False):
@@ -55,6 +57,6 @@ class Model(OriginalModel):
             var_y = UpscaleBlock(256, activation="leakyrelu")(var_y)
             var_y = UpscaleBlock(128, activation="leakyrelu")(var_y)
             var_y = UpscaleBlock(64, activation="leakyrelu")(var_y)
-            var_y = Conv2DOutput(1, 5, name="mask_out_{}".format(side))(var_y)
+            var_y = Conv2DOutput(1, 5, name=f"mask_out_{side}")(var_y)
             outputs.append(var_y)
-        return KerasModel([input_], outputs=outputs, name="decoder_{}".format(side))
+        return KModel([input_], outputs=outputs, name=f"decoder_{side}")

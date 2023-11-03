@@ -3,10 +3,14 @@
 !*.keep
 !*.md
 
+# Requirements files
+!/requirements/
+!/requirements/*requirements*.txt
+!/requirements/*conda*.yml
+
 # Root files
 !Dockerfile*
 !.pylintrc
-!*requirements*.txt
 !setup.cfg
 !.travis.yml
 !/faceswap.py
@@ -15,11 +19,13 @@
 !/update_deps.py
 
 # Support files
-!_travis/
-!_travis/*.py
+!/.github/
+!/.github/workflows/
+!/.github/workflows/*.yml
 !.install/
 !.install/**
 !config/
+!.readthedocs.yml
 !docs/
 !docs/full**
 !docs/_static**
@@ -30,11 +36,13 @@
 !tests/**/*.py
 
 # Core files
+!.fs_cache
 !lib/
 !lib/**/
 !lib/**/*.py
 !lib/gui/**/icons/*.png
 !lib/gui/**/themes/default.json
+!lib/gui/**/presets/**/*.json
 !plugins/
 !plugins/**/
 !plugins/**/*.py

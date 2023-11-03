@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """ Improved autoencoder for faceswap """
 
-from keras.layers import Concatenate, Dense, Flatten, Input, Reshape
+# Ignore linting errors from Tensorflow's thoroughly broken import system
+from tensorflow.keras.layers import Concatenate, Dense, Flatten, Input, Reshape  # noqa:E501  # pylint:disable=import-error
+from tensorflow.keras.models import Model as KModel  # pylint:disable=import-error
 
 from lib.model.nn_blocks import Conv2DOutput, Conv2DBlock, UpscaleBlock
-from ._base import ModelBase, KerasModel
+
+from ._base import ModelBase
 
 
 class Model(ModelBase):
@@ -28,7 +31,7 @@ class Model(ModelBase):
         outputs = [decoder(Concatenate()([inter_a(encoder_a), inter_both(encoder_a)])),
                    decoder(Concatenate()([inter_b(encoder_b), inter_both(encoder_b)]))]
 
-        autoencoder = KerasModel(inputs, outputs, name=self.model_name)
+        autoencoder = KModel(inputs, outputs, name=self.model_name)
         return autoencoder
 
     def encoder(self):
@@ -40,7 +43,7 @@ class Model(ModelBase):
         var_x = Conv2DBlock(512, activation="leakyrelu")(var_x)
         var_x = Conv2DBlock(1024, activation="leakyrelu")(var_x)
         var_x = Flatten()(var_x)
-        return KerasModel(input_, var_x, name="encoder")
+        return KModel(input_, var_x, name="encoder")
 
     def intermediate(self, side):
         """ Intermediate Network """
@@ -48,7 +51,7 @@ class Model(ModelBase):
         var_x = Dense(self.encoder_dim)(input_)
         var_x = Dense(4 * 4 * int(self.encoder_dim/2))(var_x)
         var_x = Reshape((4, 4, int(self.encoder_dim/2)))(var_x)
-        return KerasModel(input_, var_x, name="inter_{}".format(side))
+        return KModel(input_, var_x, name=f"inter_{side}")
 
     def decoder(self):
         """ Decoder Network """
@@ -69,12 +72,12 @@ class Model(ModelBase):
             var_y = UpscaleBlock(64, activation="leakyrelu")(var_y)
             var_y = Conv2DOutput(1, 5, name="mask_out")(var_y)
             outputs.append(var_y)
-        return KerasModel(input_, outputs=outputs, name="decoder")
+        return KModel(input_, outputs=outputs, name="decoder")
 
     def _legacy_mapping(self):
         """ The mapping of legacy separate model names to single model names """
-        return {"{}_encoder.h5".format(self.name): "encoder",
-                "{}_intermediate_A.h5".format(self.name): "inter_a",
-                "{}_intermediate_B.h5".format(self.name): "inter_b",
-                "{}_inter.h5".format(self.name): "inter_both",
-                "{}_decoder.h5".format(self.name): "decoder"}
+        return {f"{self.name}_encoder.h5": "encoder",
+                f"{self.name}_intermediate_A.h5": "inter_a",
+                f"{self.name}_intermediate_B.h5": "inter_b",
+                f"{self.name}_inter.h5": "inter_both",
+                f"{self.name}_decoder.h5": "decoder"}

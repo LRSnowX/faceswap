@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
 """ The master faceswap.py script """
 import gettext
+import locale
+import os
 import sys
 
-from lib.cli import args as cli_args
-from lib.config import generate_configs
+# Translations don't work by default in Windows, so hack in environment variable
+if sys.platform.startswith("win"):
+    os.environ["LANG"], _ = locale.getdefaultlocale()
 
+from lib.cli import args as cli_args  # pylint:disable=wrong-import-position
+from lib.config import generate_configs  # pylint:disable=wrong-import-position
 
 # LOCALES
 _LANG = gettext.translation("faceswap", localedir="locales", fallback=True)
 _ = _LANG.gettext
 
-
-if sys.version_info[0] < 3:
-    raise Exception("This program requires at least python3.7")
-if sys.version_info[0] == 3 and sys.version_info[1] < 7:
-    raise Exception("This program requires at least python3.7")
-
+if sys.version_info < (3, 10):
+    raise ValueError("This program requires at least python 3.10")
 
 _PARSER = cli_args.FullHelpArgumentParser()
 
 
-def _bad_args(*args):  # pylint:disable=unused-argument
+def _bad_args(*args) -> None:  # pylint:disable=unused-argument
     """ Print help to console when bad arguments are provided. """
     print(cli_args)
     _PARSER.print_help()
     sys.exit(0)
 
 
-def _main():
+def _main() -> None:
     """ The main entry point into Faceswap.
 
     - Generates the config files, if they don't pre-exist.
